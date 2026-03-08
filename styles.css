@@ -1,4 +1,16 @@
-body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
-#bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 12px; padding: 12px; background: #fff; border-top: 1px solid #eee; }
-#bottom-nav a { text-decoration: none; color: #333; }
-#app { padding-bottom: 64px; }
+/* Minimal extras; Tailwind does most of the work */
+
+.navbtn {
+  padding: 0.75rem 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: rgb(51 65 85); /* slate-700 */
+}
+
+.navbtn.active {
+  color: rgb(37 99 235); /* blue-600 */
+  font-weight: 600;
+}
+
+/* prevent iOS-ish tap highlight; harmless on Android */
+* { -webkit-tap-highlight-color: transparent; }

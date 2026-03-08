@@ -1,11 +1,14 @@
-/* db.js — IndexedDB via Dexie (v0: local-first) */
+/* db.js — IndexedDB via Dexie (v0: local-first)
+   Fix: archived is numeric (0/1), because IndexedDB keys cannot be boolean on Chromium.
+*/
 
 const DB_NAME = "dessert_tracker_v0";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // bump version to upgrade schema/values
 
 const db = new Dexie(DB_NAME);
 
-db.version(DB_VERSION).stores({
+// v1 (old) schema (for Dexie upgrade chain completeness)
+db.version(1).stores({
   dessertTypes: "id, nameLower, archived, createdAt",
   places: "id, nameLower, archived, createdAt",
   items: "id, [dessertTypeId+placeId], archived, createdAt",
@@ -13,6 +16,27 @@ db.version(DB_VERSION).stores({
   tastings: "id, itemId, date, archived, createdAt",
   photos: "id, createdAt"
 });
+
+// v2 schema (same indexes, but archived values are numeric 0/1)
+db.version(2)
+  .stores({
+    dessertTypes: "id, nameLower, archived, createdAt",
+    places: "id, nameLower, archived, createdAt",
+    items: "id, [dessertTypeId+placeId], archived, createdAt",
+    wishlist: "id, itemId, archived, createdAt",
+    tastings: "id, itemId, date, archived, createdAt",
+    photos: "id, createdAt"
+  })
+  .upgrade(async (tx) => {
+    // Convert any existing boolean archived values to 0/1 (safe even if empty DB)
+    const tables = ["dessertTypes", "places", "items", "wishlist", "tastings"];
+    for (const t of tables) {
+      await tx.table(t).toCollection().modify((obj) => {
+        if (typeof obj.archived === "boolean") obj.archived = obj.archived ? 1 : 0;
+        if (obj.archived === undefined) obj.archived = 0;
+      });
+    }
+  });
 
 /** Utility */
 function nowIso() { return new Date().toISOString(); }
@@ -55,7 +79,7 @@ async function getOrCreateDessertType(name) {
   }
   const id = crypto.randomUUID();
   const ts = nowIso();
-  dt = { id, name: name.trim(), nameLower, archived: false, createdAt: ts, updatedAt: ts };
+  dt = { id, name: name.trim(), nameLower, archived: 0, createdAt: ts, updatedAt: ts };
   await db.dessertTypes.add(dt);
   return dt;
 }
@@ -81,7 +105,7 @@ async function getOrCreatePlace(name, mapsUrlOptional = "") {
     name: name.trim(),
     nameLower,
     mapsUrl,
-    archived: false,
+    archived: 0,
     createdAt: ts,
     updatedAt: ts
   };
@@ -96,7 +120,7 @@ async function getOrCreateItem(dessertTypeId, placeId) {
   const existing = await db.items.where("[dessertTypeId+placeId]").equals([dessertTypeId, placeId]).first();
   if (existing) {
     if (existing.archived) {
-      await db.items.update(existing.id, { archived: false, archivedAt: undefined, updatedAt: nowIso() });
+      await db.items.update(existing.id, { archived: 0, archivedAt: undefined, updatedAt: nowIso() });
       return await db.items.get(existing.id);
     }
     return existing;
@@ -104,7 +128,7 @@ async function getOrCreateItem(dessertTypeId, placeId) {
 
   const id = crypto.randomUUID();
   const ts = nowIso();
-  const item = { id, dessertTypeId, placeId, archived: false, createdAt: ts, updatedAt: ts };
+  const item = { id, dessertTypeId, placeId, archived: 0, createdAt: ts, updatedAt: ts };
   await db.items.add(item);
   return item;
 }
@@ -114,7 +138,7 @@ async function createWishlistEntry(itemId) {
   if (!itemId) throw new Error("Wishlist entry requires itemId");
   const id = crypto.randomUUID();
   const ts = nowIso();
-  const row = { id, itemId, archived: false, createdAt: ts, updatedAt: ts };
+  const row = { id, itemId, archived: 0, createdAt: ts, updatedAt: ts };
   await db.wishlist.add(row);
   return row;
 }
@@ -142,7 +166,9 @@ async function deletePhoto(photoId) {
 /** Tastings */
 function clampRating(r) {
   const n = Number(r);
-  if (!Number.isFinite(n) || n < 1 || n > 5 || Math.floor(n) !== n) throw new Error("Rating must be an integer 1–5");
+  if (!Number.isFinite(n) || n < 1 || n > 5 || Math.floor(n) !== n) {
+    throw new Error("Rating must be an integer 1–5");
+  }
   return n;
 }
 async function createTasting(tastingData, photoBlobAndMime /* {blob, mime} | null */) {
@@ -169,7 +195,7 @@ async function createTasting(tastingData, photoBlobAndMime /* {blob, mime} | nul
     review: (tastingData.review || "").trim() || undefined,
     photoId,
     photoMime,
-    archived: false,
+    archived: 0,
     createdAt: ts,
     updatedAt: ts
   };
@@ -209,25 +235,25 @@ async function archiveEntity(tableName, id) {
   const table = db[tableName];
   if (!table) throw new Error(`Unknown table: ${tableName}`);
   const ts = nowIso();
-  await table.update(id, { archived: true, archivedAt: ts, updatedAt: ts });
+  await table.update(id, { archived: 1, archivedAt: ts, updatedAt: ts });
 }
 async function restoreEntity(tableName, id) {
   const table = db[tableName];
   if (!table) throw new Error(`Unknown table: ${tableName}`);
   const ts = nowIso();
-  await table.update(id, { archived: false, archivedAt: undefined, updatedAt: ts });
+  await table.update(id, { archived: 0, archivedAt: undefined, updatedAt: ts });
 }
 
 /** Queries / View models */
 async function listDessertTypesActive() {
-  return db.dessertTypes.where("archived").equals(false).toArray();
+  return db.dessertTypes.where("archived").equals(0).toArray();
 }
 async function listPlacesActive() {
-  return db.places.where("archived").equals(false).toArray();
+  return db.places.where("archived").equals(0).toArray();
 }
 
 async function listWishlistActive() {
-  const entries = await db.wishlist.where("archived").equals(false).reverse().sortBy("createdAt");
+  const entries = await db.wishlist.where("archived").equals(0).reverse().sortBy("createdAt");
   return enrichWishlistEntries(entries);
 }
 
@@ -261,7 +287,7 @@ async function enrichWishlistEntries(entries) {
 }
 
 async function listRecentTastings(limit = 5) {
-  const tastings = await db.tastings.where("archived").equals(false).reverse().sortBy("createdAt");
+  const tastings = await db.tastings.where("archived").equals(0).reverse().sortBy("createdAt");
   const sliced = tastings.slice(0, limit);
   return enrichTastings(sliced);
 }
@@ -292,7 +318,7 @@ async function enrichTastings(tastings) {
 }
 
 async function listTriedItemSummariesActive() {
-  const tastings = await db.tastings.where("archived").equals(false).toArray();
+  const tastings = await db.tastings.where("archived").equals(0).toArray();
   const agg = new Map();
   for (const t of tastings) {
     const a = agg.get(t.itemId) || { count: 0, sum: 0 };
@@ -342,11 +368,11 @@ async function getItemDetail(itemId) {
 
 async function listArchivedAll() {
   const [dessertTypes, places, items, wishlist, tastings] = await Promise.all([
-    db.dessertTypes.where("archived").equals(true).toArray(),
-    db.places.where("archived").equals(true).toArray(),
-    db.items.where("archived").equals(true).toArray(),
-    db.wishlist.where("archived").equals(true).toArray(),
-    db.tastings.where("archived").equals(true).toArray()
+    db.dessertTypes.where("archived").equals(1).toArray(),
+    db.places.where("archived").equals(1).toArray(),
+    db.items.where("archived").equals(1).toArray(),
+    db.wishlist.where("archived").equals(1).toArray(),
+    db.tastings.where("archived").equals(1).toArray()
   ]);
 
   const wishlistEnriched = await enrichWishlistEntries(wishlist);

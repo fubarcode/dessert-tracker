@@ -1,16 +1,41 @@
-/* Minimal extras; Tailwind does most of the work */
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Dessert Tracker</title>
 
-.navbtn {
-  padding: 0.75rem 0.25rem;
-  font-size: 0.75rem;
-  line-height: 1rem;
-  color: rgb(51 65 85); /* slate-700 */
-}
+  <!-- Tailwind Play CDN (no build step) -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-.navbtn.active {
-  color: rgb(37 99 235); /* blue-600 */
-  font-weight: 600;
-}
+  <!-- Dexie (IndexedDB wrapper) -->
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4.3.0/dist/dexie.min.js"></script>
 
-/* prevent iOS-ish tap highlight; harmless on Android */
-* { -webkit-tap-highlight-color: transparent; }
+  <!-- JSZip (ZIP export) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body class="bg-slate-50 text-slate-900">
+  <!-- Toasts -->
+  <div id="toast-root" class="fixed top-3 left-1/2 -translate-x-1/2 z-50 space-y-2 w-[92%] max-w-md"></div>
+
+  <!-- App -->
+  <div id="app" class="min-h-screen pb-20"></div>
+
+  <!-- Bottom nav -->
+  <nav id="bottom-nav" class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200">
+    <div class="mx-auto max-w-2xl grid grid-cols-5">
+      <button data-route="#/wishlist" class="navbtn">Wishlist</button>
+      <button data-route="#/new" class="navbtn">New</button>
+      <button data-route="#/tried" class="navbtn">Tried</button>
+      <button data-route="#/archived" class="navbtn">Archived</button>
+      <button data-route="#/export" class="navbtn">Export</button>
+    </div>
+  </nav>
+
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

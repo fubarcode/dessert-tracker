@@ -1,12 +1,41 @@
-const app = document.getElementById("app");
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Dessert Tracker</title>
 
-function render() {
-  const hash = location.hash || "#/wishlist";
-  if (hash.startsWith("#/wishlist")) app.innerHTML = "<h1>Wishlist</h1><p>Shell is live ✅</p>";
-  else if (hash.startsWith("#/new")) app.innerHTML = "<h1>New Tasting</h1><p>Shell is live ✅</p>";
-  else if (hash.startsWith("#/tried")) app.innerHTML = "<h1>Tried</h1><p>Shell is live ✅</p>";
-  else app.innerHTML = "<h1>Not found</h1>";
-}
+  <!-- Tailwind Play CDN (no build step) -->
+  <script src="https://cdn.tailwindcss.com"></script>
 
-window.addEventListener("hashchange", render);
-render();
+  <!-- Dexie (IndexedDB wrapper) -->
+  <script src="https://cdn.jsdelivr.net/npm/dexie@4.3.0/dist/dexie.min.js"></script>
+
+  <!-- JSZip (ZIP export) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body class="bg-slate-50 text-slate-900">
+  <!-- Toasts -->
+  <div id="toast-root" class="fixed top-3 left-1/2 -translate-x-1/2 z-50 space-y-2 w-[92%] max-w-md"></div>
+
+  <!-- App -->
+  <div id="app" class="min-h-screen pb-20"></div>
+
+  <!-- Bottom nav -->
+  <nav id="bottom-nav" class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200">
+    <div class="mx-auto max-w-2xl grid grid-cols-5">
+      <button data-route="#/wishlist" class="navbtn">Wishlist</button>
+      <button data-route="#/new" class="navbtn">New</button>
+      <button data-route="#/tried" class="navbtn">Tried</button>
+      <button data-route="#/archived" class="navbtn">Archived</button>
+      <button data-route="#/export" class="navbtn">Export</button>
+    </div>
+  </nav>
+
+  <script src="./db.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

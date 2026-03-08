@@ -40,9 +40,7 @@ function parseRoute() {
   return { name: path.replace("#/", "") || "wishlist", params };
 }
 
-function navigate(hash) {
-  location.hash = hash;
-}
+function navigate(hash) { location.hash = hash; }
 
 function pageShell(title, rightHtml = "") {
   return `
@@ -149,7 +147,9 @@ async function render() {
     if (r.name === "export") return await renderExport();
   } catch (e) {
     console.error(e);
-    appEl.innerHTML = pageShell("Error") + `<div class="px-4 max-w-2xl mx-auto">${card(`<div class="text-rose-700 text-sm">${escapeHtml(e.message || e)}</div>`)}</div>`;
+    appEl.innerHTML =
+      pageShell("Error") +
+      `<div class="px-4 max-w-2xl mx-auto">${card(`<div class="text-rose-700 text-sm">${escapeHtml(e.message || e)}</div>`)}</div>`;
   }
 }
 
@@ -172,36 +172,16 @@ async function renderWishlist() {
             ${e.mapsUrl ? `<a class="text-sm text-blue-600 underline" target="_blank" rel="noreferrer" href="${escapeAttr(e.mapsUrl)}">Open Maps</a>` : ``}
           </div>
           <div class="flex flex-col gap-2 shrink-0">
-            ${buttonGhost("Edit", `data-action="wl-edit" data-id="${e.id}"`)}
             ${button("Tried", `data-action="wl-tried" data-id="${e.id}" data-itemid="${e.itemId}"`)}
             ${buttonDanger("Archive", `data-action="wl-archive" data-id="${e.id}"`)}
           </div>
         </div>
-      `)).join("") : card(`
-        <div class="text-sm text-slate-600">
-          Nothing in your wishlist yet. Tap <span class="font-medium">Add</span> to save a dessert you want to try.
-        </div>
-      `)}
+      `)).join("") : card(`<div class="text-sm text-slate-600">Nothing yet. Tap <b>Add</b>.</div>`)}
     </div>
     <datalist id="dt-desserts">${dessertOptions}</datalist>
-    <datalist id="dt-places">${placeOptions}</datalist>
-    `;
+    <datalist id="dt-places">${placeOptions}</datalist>`;
 
-  document.getElementById("wl-add").onclick = () => openWishlistModal({ mode: "add" });
-
-  appEl.querySelectorAll('[data-action="wl-edit"]').forEach(btn => {
-    btn.onclick = async () => {
-      const id = btn.getAttribute("data-id");
-      const current = (await DTDB.listWishlistActive()).find(x => x.id === id);
-      openWishlistModal({
-        mode: "edit",
-        id,
-        dessert: current?.dessertName || "",
-        place: current?.placeName || "",
-        mapsUrl: current?.mapsUrl || ""
-      });
-    };
-  });
+  document.getElementById("wl-add").onclick = () => openWishlistModal({});
 
   appEl.querySelectorAll('[data-action="wl-tried"]').forEach(btn => {
     btn.onclick = async () => {
@@ -223,30 +203,30 @@ async function renderWishlist() {
   });
 }
 
-function openWishlistModal({ mode, id, dessert = "", place = "", mapsUrl = "" }) {
+function openWishlistModal() {
   openModal(`
     <div class="flex items-center justify-between">
-      <div class="text-lg font-semibold">${mode === "add" ? "Add to Wishlist" : "Edit Wishlist"}</div>
+      <div class="text-lg font-semibold">Add to Wishlist</div>
       ${buttonGhost("Close", `id="modal-close"`)}
     </div>
 
     <form id="wl-form" class="mt-4 space-y-3">
       <div>
         <label class="text-sm font-medium">Dessert</label>
-        <input list="dt-desserts" name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="e.g., Tiramisu" value="${escapeAttr(dessert)}" required />
+        <input list="dt-desserts" name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" required />
       </div>
       <div>
         <label class="text-sm font-medium">Place</label>
-        <input list="dt-places" name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="e.g., Third Wave Cafe" value="${escapeAttr(place)}" required />
+        <input list="dt-places" name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" required />
       </div>
       <div>
         <label class="text-sm font-medium">Google Maps URL (optional)</label>
-        <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="Paste a Google Maps link" value="${escapeAttr(mapsUrl)}" />
+        <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" />
       </div>
 
       <div class="pt-2 flex justify-end gap-2">
         ${buttonGhost("Cancel", `type="button" id="wl-cancel"`)}
-        ${button(mode === "add" ? "Add" : "Save", `type="submit"`)}
+        ${button("Add", `type="submit"`)}
       </div>
     </form>
   `);
@@ -264,15 +244,9 @@ function openWishlistModal({ mode, id, dessert = "", place = "", mapsUrl = "" })
     const dt = await DTDB.getOrCreateDessertType(dessertName);
     const pl = await DTDB.getOrCreatePlace(placeName, mapsUrl);
     const it = await DTDB.getOrCreateItem(dt.id, pl.id);
+    await DTDB.createWishlistEntry(it.id);
 
-    if (mode === "add") {
-      await DTDB.createWishlistEntry(it.id);
-      toast("Added to wishlist", "ok");
-    } else {
-      await DTDB.updateWishlistEntry(id, { itemId: it.id });
-      toast("Wishlist updated", "ok");
-    }
-
+    toast("Added", "ok");
     closeModal();
     await render();
   };
@@ -280,11 +254,6 @@ function openWishlistModal({ mode, id, dessert = "", place = "", mapsUrl = "" })
 
 async function renderNewTasting(params) {
   const itemId = params?.get("itemId") || "";
-
-  const desserts = await DTDB.listDessertTypesActive();
-  const places = await DTDB.listPlacesActive();
-  const dessertOptions = desserts.map(d => `<option value="${escapeHtml(d.name)}"></option>`).join("");
-  const placeOptions = places.map(p => `<option value="${escapeHtml(p.name)}"></option>`).join("");
 
   let prefillDessert = "";
   let prefillPlace = "";
@@ -297,8 +266,6 @@ async function renderNewTasting(params) {
     prefillMaps = detail.place?.mapsUrl || "";
   }
 
-  const recent = await DTDB.listRecentTastings(5);
-
   appEl.innerHTML =
     pageShell("New Tasting") +
     `<div class="mx-auto max-w-2xl px-4 space-y-4 pb-6">
@@ -306,20 +273,17 @@ async function renderNewTasting(params) {
         <form id="tasting-form" class="space-y-3">
           <div>
             <label class="text-sm font-medium">Dessert</label>
-            <input list="dt-desserts" name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
-              placeholder="e.g., Cheesecake" value="${escapeAttr(prefillDessert)}" required />
+            <input name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" value="${escapeAttr(prefillDessert)}" required />
           </div>
 
           <div>
             <label class="text-sm font-medium">Place</label>
-            <input list="dt-places" name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
-              placeholder="e.g., Magnolia Bakery" value="${escapeAttr(prefillPlace)}" required />
+            <input name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" value="${escapeAttr(prefillPlace)}" required />
           </div>
 
           <div>
             <label class="text-sm font-medium">Google Maps URL (optional)</label>
-            <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
-              placeholder="Paste a Google Maps link" value="${escapeAttr(prefillMaps)}" />
+            <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" value="${escapeAttr(prefillMaps)}" />
           </div>
 
           <div class="grid grid-cols-2 gap-3">
@@ -344,8 +308,7 @@ async function renderNewTasting(params) {
 
           <div>
             <label class="text-sm font-medium">Review (optional)</label>
-            <textarea name="review" rows="3" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
-              placeholder="What did you like? Anything to remember?"></textarea>
+            <textarea name="review" rows="3" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"></textarea>
           </div>
 
           <div>
@@ -355,29 +318,11 @@ async function renderNewTasting(params) {
           </div>
 
           <div class="pt-2 flex justify-end gap-2">
-            ${buttonGhost("Clear", `type="button" id="tasting-clear"`)}
             ${button("Save Tasting", `type="submit"`)}
           </div>
         </form>
       `)}
-
-      ${card(`
-        <div class="font-semibold mb-2">Recent Tastings</div>
-        ${recent.length ? `
-          <div class="space-y-2">
-            ${recent.map(t => `
-              <div class="min-w-0">
-                <div class="text-sm font-medium truncate">${escapeHtml(t.dessertName)} <span class="text-slate-500">@</span> ${escapeHtml(t.placeName)}</div>
-                <div class="text-xs text-slate-600">${escapeHtml(t.date)} • Rating ${t.rating}</div>
-              </div>
-            `).join("")}
-          </div>
-        ` : `<div class="text-sm text-slate-600">No tastings yet.</div>`}
-      `)}
-    </div>
-    <datalist id="dt-desserts">${dessertOptions}</datalist>
-    <datalist id="dt-places">${placeOptions}</datalist>
-    `;
+    </div>`;
 
   const form = document.getElementById("tasting-form");
   const photoInput = form.photo;
@@ -386,67 +331,233 @@ async function renderNewTasting(params) {
 
   photoInput.onchange = async () => {
     const f = photoInput.files && photoInput.files[0];
-    if (!f) {
-      compressedPhoto = null;
-      photoPreview.innerHTML = "";
-      return;
-    }
+    if (!f) { compressedPhoto = null; photoPreview.innerHTML = ""; return; }
     photoPreview.textContent = "Compressing…";
-    try {
-      compressedPhoto = await fileToJpegCompressed(f, 1280, 0.75);
-      const kb = Math.round((compressedPhoto.blob.size || 0) / 1024);
-      const url = URL.createObjectURL(compressedPhoto.blob);
-      activeObjectUrls.push(url);
-      photoPreview.innerHTML = `
-        <div class="flex items-center gap-3">
-          <img src="${url}" class="h-16 w-16 object-cover rounded-xl border border-slate-200" />
-          <div class="text-xs text-slate-600">
-            Compressed: ${compressedPhoto.width}×${compressedPhoto.height} • ~${kb} KB
-          </div>
-        </div>
-      `;
-    } catch (e) {
-      console.error(e);
-      compressedPhoto = null;
-      photoPreview.innerHTML = `<div class="text-rose-700 text-sm">Could not process photo.</div>`;
-    }
-  };
-
-  document.getElementById("tasting-clear").onclick = () => {
-    form.reset();
-    form.date.value = DTDB.todayIsoDate();
-    compressedPhoto = null;
-    photoPreview.innerHTML = "";
-    toast("Cleared", "ok");
+    compressedPhoto = await fileToJpegCompressed(f, 1280, 0.75);
+    const kb = Math.round((compressedPhoto.blob.size || 0) / 1024);
+    photoPreview.textContent = `Compressed (~${kb} KB)`;
   };
 
   form.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
 
-    const dessertName = String(fd.get("dessert") || "");
-    const placeName = String(fd.get("place") || "");
-    const mapsUrl = String(fd.get("mapsUrl") || "");
-    const rating = Number(fd.get("rating"));
-    const date = String(fd.get("date") || DTDB.todayIsoDate());
-    const wouldRepeat = form.wouldRepeat.checked ? true : undefined;
-    const review = String(fd.get("review") || "");
-
-    const dt = await DTDB.getOrCreateDessertType(dessertName);
-    const pl = await DTDB.getOrCreatePlace(placeName, mapsUrl);
+    const dt = await DTDB.getOrCreateDessertType(String(fd.get("dessert") || ""));
+    const pl = await DTDB.getOrCreatePlace(String(fd.get("place") || ""), String(fd.get("mapsUrl") || ""));
     const it = await DTDB.getOrCreateItem(dt.id, pl.id);
 
     const photoArg = compressedPhoto?.blob ? { blob: compressedPhoto.blob, mime: "image/jpeg" } : null;
-    await DTDB.createTasting({ itemId: it.id, date, rating, wouldRepeat, review }, photoArg);
 
-    toast("Tasting saved ✅", "ok");
+    await DTDB.createTasting({
+      itemId: it.id,
+      date: String(fd.get("date") || DTDB.todayIsoDate()),
+      rating: Number(fd.get("rating")),
+      wouldRepeat: form.wouldRepeat.checked ? true : undefined,
+      review: String(fd.get("review") || "")
+    }, photoArg);
+
+    toast("Saved ✅", "ok");
     navigate(`#/item/${encodeURIComponent(it.id)}`);
   };
 }
 
-// NOTE: The rest of app.js (Tried, Item detail, Archived, Export, wiring, escaping) is unchanged
-// from the version I previously gave you. If you want, I can paste the full remainder too,
-// but first confirm the site loads after these file corrections.
+async function renderTried() {
+  const rows = await DTDB.listTriedItemSummariesActive();
+
+  appEl.innerHTML =
+    pageShell("Tried") +
+    `<div class="mx-auto max-w-2xl px-4 space-y-3 pb-6">
+      ${card(`<input id="tried-search" class="w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="Search dessert or place…" />`)}
+      <div id="tried-list" class="space-y-3"></div>
+    </div>`;
+
+  const listEl = document.getElementById("tried-list");
+  const searchEl = document.getElementById("tried-search");
+
+  function paint(list) {
+    listEl.innerHTML = list.length ? list.map(r => card(`
+      <button class="w-full text-left" data-open="${r.itemId}">
+        <div class="font-semibold">${escapeHtml(r.dessertName)}</div>
+        <div class="text-sm text-slate-600">${escapeHtml(r.placeName)}</div>
+        <div class="text-xs text-slate-500 mt-1">${r.count} tastings • Avg ${r.avg.toFixed(1)}</div>
+      </button>
+    `)).join("") : card(`<div class="text-sm text-slate-600">No tastings yet.</div>`);
+
+    listEl.querySelectorAll("[data-open]").forEach(b => {
+      b.onclick = () => navigate(`#/item/${encodeURIComponent(b.getAttribute("data-open"))}`);
+    });
+  }
+
+  paint(rows);
+  searchEl.oninput = () => {
+    const q = (searchEl.value || "").toLowerCase().trim();
+    paint(!q ? rows : rows.filter(r =>
+      r.dessertName.toLowerCase().includes(q) || r.placeName.toLowerCase().includes(q)
+    ));
+  };
+}
+
+async function renderItemDetail(itemId) {
+  const detail = await DTDB.getItemDetail(itemId);
+  const { dessert, place, tastings, stats } = detail;
+
+  appEl.innerHTML =
+    pageShell("Item", buttonGhost("Back", `id="back"`)) +
+    `<div class="mx-auto max-w-2xl px-4 space-y-3 pb-6">
+      ${card(`
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-lg font-semibold truncate">${escapeHtml(dessert?.name || "")}</div>
+            <div class="text-sm text-slate-600 truncate">${escapeHtml(place?.name || "")}</div>
+          </div>
+          <div class="text-right">
+            <div class="text-sm text-slate-600">${stats.count} tastings</div>
+            <div class="text-xl font-semibold">${stats.avg.toFixed(1)}</div>
+          </div>
+        </div>
+      `)}
+      ${card(`
+        <div class="font-semibold mb-2">Tastings</div>
+        ${tastings.length ? tastings.map(t => `
+          <div class="border border-slate-200 rounded-2xl p-3 mb-3">
+            <div class="text-sm text-slate-600">${escapeHtml(t.date)} • Rating <b>${t.rating}</b></div>
+            ${t.review ? `<div class="text-sm mt-2 whitespace-pre-wrap">${escapeHtml(t.review)}</div>` : ``}
+          </div>
+        `).join("") : `<div class="text-sm text-slate-600">No tastings yet.</div>`}
+      `)}
+    </div>`;
+
+  document.getElementById("back").onclick = () => navigate("#/tried");
+}
+
+async function renderArchived() {
+  const a = await DTDB.listArchivedAll();
+  appEl.innerHTML =
+    pageShell("Archived") +
+    `<div class="mx-auto max-w-2xl px-4 space-y-3 pb-6">
+      ${card(renderArchivedSection("Wishlist", a.wishlist, "wishlist", x => `${x.dessertName} @ ${x.placeName}`))}
+      ${card(renderArchivedSection("Tastings", a.tastings, "tastings", t => `${t.itemId} • ${t.date} • ${t.rating}`))}
+      ${card(renderArchivedSection("Items", a.items, "items", i => `${i.dessertName} @ ${i.placeName}`))}
+      ${card(renderArchivedSection("Places", a.places, "places", p => p.name))}
+      ${card(renderArchivedSection("Dessert Types", a.dessertTypes, "dessertTypes", d => d.name))}
+    </div>`;
+
+  appEl.querySelectorAll("[data-restore]").forEach(btn => {
+    btn.onclick = async () => {
+      await DTDB.restoreEntity(btn.getAttribute("data-table"), btn.getAttribute("data-id"));
+      toast("Restored", "ok");
+      await render();
+    };
+  });
+}
+
+function renderArchivedSection(title, rows, tableName, labelFn) {
+  if (!rows?.length) return `<div class="font-semibold mb-2">${escapeHtml(title)}</div><div class="text-sm text-slate-600">None.</div>`;
+  return `
+    <div class="font-semibold mb-2">${escapeHtml(title)}</div>
+    <div class="space-y-2">
+      ${rows.map(r => `
+        <div class="flex items-center justify-between gap-3">
+          <div class="text-sm min-w-0 truncate">${escapeHtml(labelFn(r))}</div>
+          ${button("Restore", `data-restore data-table="${tableName}" data-id="${r.id}"`)}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+async function renderExport() {
+  appEl.innerHTML =
+    pageShell("Export") +
+    `<div class="mx-auto max-w-2xl px-4 space-y-3 pb-6">
+      ${card(`
+        <div class="text-sm text-slate-700">Creates a ZIP with <b>all data + all photos</b>.</div>
+        <div class="mt-3 flex gap-2 items-center">
+          ${button("Export ZIP", `id="export-btn"`)}
+          <div id="export-status" class="text-sm text-slate-600"></div>
+        </div>
+      `)}
+    </div>`;
+
+  const btn = document.getElementById("export-btn");
+  const status = document.getElementById("export-status");
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    status.textContent = "Preparing…";
+
+    const bundle = await DTDB.exportBundle();
+    const zip = new JSZip();
+
+    const manifest = {
+      app: "dessert-tracker",
+      exportVersion: "1",
+      exportedAt: new Date().toISOString(),
+      counts: {
+        dessertTypes: bundle.dessertTypes.length,
+        places: bundle.places.length,
+        items: bundle.items.length,
+        wishlist: bundle.wishlist.length,
+        tastings: bundle.tastings.length,
+        photos: bundle.photos.length
+      },
+      photo: { format: "jpeg", maxDimension: 1280, quality: 0.75 }
+    };
+
+    zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+    zip.file("data.json", JSON.stringify({
+      dessertTypes: bundle.dessertTypes,
+      places: bundle.places,
+      items: bundle.items,
+      wishlist: bundle.wishlist,
+      tastings: bundle.tastings
+    }, null, 2));
+
+    const photosFolder = zip.folder("photos");
+    for (let i = 0; i < bundle.photos.length; i++) {
+      status.textContent = `Adding photos… (${i + 1}/${bundle.photos.length})`;
+      const p = bundle.photos[i];
+      if (p?.blob) photosFolder.file(`${p.id}.jpg`, p.blob);
+      await new Promise(r => setTimeout(r, 0));
+    }
+
+    status.textContent = "Creating ZIP…";
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+
+    const dt = new Date();
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    const hh = String(dt.getHours()).padStart(2, "0");
+    const min = String(dt.getMinutes()).padStart(2, "0");
+    const filename = `dessert-tracker_export_${yyyy}${mm}${dd}_${hh}${min}.zip`;
+
+    const url = URL.createObjectURL(zipBlob);
+    activeObjectUrls.push(url);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    toast("Export ready ✅", "ok");
+    status.textContent = "Done.";
+    btn.disabled = false;
+  };
+}
+
+// wiring
+navEl.querySelectorAll("button[data-route]").forEach(btn => {
+  btn.addEventListener("click", () => navigate(btn.getAttribute("data-route")));
+});
+window.addEventListener("hashchange", render);
+window.addEventListener("load", () => {
+  if (!location.hash) location.hash = "#/wishlist";
+  render();
+});
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -456,14 +567,3 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 function escapeAttr(s) { return escapeHtml(s); }
-
-// Temporary minimal routing so the app works immediately after paste.
-// If your app.js already had full routes, keep them; otherwise use this:
-navEl.querySelectorAll("button[data-route]").forEach(btn => {
-  btn.addEventListener("click", () => navigate(btn.getAttribute("data-route")));
-});
-window.addEventListener("hashchange", render);
-window.addEventListener("load", () => {
-  if (!location.hash) location.hash = "#/wishlist";
-  render();
-});

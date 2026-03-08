@@ -1,427 +1,469 @@
-/* db.js — IndexedDB via Dexie (v0: local-first) */
+/* app.js — Vanilla JS SPA UI */
 
-const DB_NAME = "dessert_tracker_v0";
-const DB_VERSION = 1;
+const appEl = document.getElementById("app");
+const navEl = document.getElementById("bottom-nav");
+const toastRoot = document.getElementById("toast-root");
 
-const db = new Dexie(DB_NAME);
+let activeObjectUrls = [];
 
-db.version(DB_VERSION).stores({
-  dessertTypes: "id, nameLower, archived, createdAt",
-  places: "id, nameLower, archived, createdAt",
-  items: "id, [dessertTypeId+placeId], archived, createdAt",
-  wishlist: "id, itemId, archived, createdAt",
-  tastings: "id, itemId, date, archived, createdAt",
-  photos: "id, createdAt"
-});
-
-/** Utility */
-function nowIso() { return new Date().toISOString(); }
-function todayIsoDate() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-function normalizeName(str) {
-  return (str || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-function assertNonEmpty(str, label) {
-  if (!str || !String(str).trim()) throw new Error(`${label} is required`);
+function clearObjectUrls() {
+  for (const u of activeObjectUrls) URL.revokeObjectURL(u);
+  activeObjectUrls = [];
 }
 
-async function getByNameLower(table, nameLower) {
-  return db[table].where("nameLower").equals(nameLower).first();
-}
-
-async function upsertTimestamps(existing, patch = {}) {
-  const ts = nowIso();
-  if (!existing) return { ...patch, createdAt: ts, updatedAt: ts };
-  return { ...existing, ...patch, updatedAt: ts };
-}
-
-/** Dessert Types */
-async function getOrCreateDessertType(name) {
-  assertNonEmpty(name, "Dessert type");
-  const nameLower = normalizeName(name);
-  let dt = await getByNameLower("dessertTypes", nameLower);
-  if (dt) {
-    // If user typed different casing, keep original name but allow updating to latest display
-    const updated = await upsertTimestamps(dt, { name: name.trim(), nameLower });
-    await db.dessertTypes.put(updated);
-    return updated;
-  }
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  dt = { id, name: name.trim(), nameLower, archived: false, createdAt: ts, updatedAt: ts };
-  await db.dessertTypes.add(dt);
-  return dt;
-}
-
-/** Places */
-async function getOrCreatePlace(name, mapsUrlOptional = "") {
-  assertNonEmpty(name, "Place");
-  const nameLower = normalizeName(name);
-  let place = await getByNameLower("places", nameLower);
-  const mapsUrl = (mapsUrlOptional || "").trim() || undefined;
-
-  if (place) {
-    const patch = { name: name.trim(), nameLower };
-    // Only update mapsUrl if provided (don’t overwrite existing with blank)
-    if (mapsUrl) patch.mapsUrl = mapsUrl;
-    const updated = await upsertTimestamps(place, patch);
-    await db.places.put(updated);
-    return updated;
-  }
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  place = {
-    id,
-    name: name.trim(),
-    nameLower,
-    mapsUrl,
-    archived: false,
-    createdAt: ts,
-    updatedAt: ts
+function toast(msg, kind = "info") {
+  const colors = {
+    info: "bg-slate-900 text-white",
+    ok: "bg-emerald-600 text-white",
+    err: "bg-rose-600 text-white",
   };
-  await db.places.add(place);
-  return place;
+  const div = document.createElement("div");
+  div.className = `px-3 py-2 rounded-xl shadow ${colors[kind] || colors.info} text-sm`;
+  div.textContent = msg;
+  toastRoot.appendChild(div);
+  setTimeout(() => div.remove(), 2200);
 }
 
-/** Items (Dessert@Place), unique-ish by (dessertTypeId, placeId) */
-async function getOrCreateItem(dessertTypeId, placeId) {
-  if (!dessertTypeId || !placeId) throw new Error("Item requires dessertTypeId and placeId");
+function setActiveNav(hash) {
+  navEl.querySelectorAll("button[data-route]").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-route") === hash);
+  });
+}
 
-  // Enforce logical uniqueness via compound index
-  const existing = await db.items.where("[dessertTypeId+placeId]").equals([dessertTypeId, placeId]).first();
-  if (existing) {
-    // Unarchive if it exists but is archived
-    if (existing.archived) {
-      await db.items.update(existing.id, { archived: false, archivedAt: undefined, updatedAt: nowIso() });
-      return await db.items.get(existing.id);
+function parseRoute() {
+  const hash = location.hash || "#/wishlist";
+  const itemMatch = hash.match(/^#\/item\/(.+)$/);
+  if (itemMatch) return { name: "item", itemId: decodeURIComponent(itemMatch[1]) };
+
+  const [path, qs] = hash.split("?");
+  const params = new URLSearchParams(qs || "");
+  return { name: path.replace("#/", "") || "wishlist", params };
+}
+
+function navigate(hash) {
+  location.hash = hash;
+}
+
+function pageShell(title, rightHtml = "") {
+  return `
+    <div class="mx-auto max-w-2xl px-4 pt-5 pb-3">
+      <div class="flex items-center justify-between gap-3">
+        <h1 class="text-xl font-semibold">${title}</h1>
+        <div>${rightHtml}</div>
+      </div>
+    </div>
+  `;
+}
+
+function card(content) {
+  return `<div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-4">${content}</div>`;
+}
+
+function button(text, extra = "") {
+  return `<button class="px-3 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 active:bg-blue-800 ${extra}">${text}</button>`;
+}
+function buttonGhost(text, extra = "") {
+  return `<button class="px-3 py-2 rounded-xl bg-slate-100 text-slate-900 text-sm font-medium hover:bg-slate-200 active:bg-slate-300 ${extra}">${text}</button>`;
+}
+function buttonDanger(text, extra = "") {
+  return `<button class="px-3 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 active:bg-rose-800 ${extra}">${text}</button>`;
+}
+
+function modal(html) {
+  return `
+    <div id="modal-overlay" class="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-40">
+      <div class="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-3xl p-4 sm:p-5 shadow-xl">
+        ${html}
+      </div>
+    </div>
+  `;
+}
+function closeModal() {
+  const el = document.getElementById("modal-overlay");
+  if (el) el.remove();
+}
+function openModal(html) {
+  closeModal();
+  document.body.insertAdjacentHTML("beforeend", modal(html));
+  const overlay = document.getElementById("modal-overlay");
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
+}
+
+async function fileToJpegCompressed(file, maxDim = 1280, quality = 0.75) {
+  if (!file) return null;
+
+  let bmp;
+  try {
+    bmp = await createImageBitmap(file);
+  } catch {
+    bmp = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  const srcW = bmp.width;
+  const srcH = bmp.height;
+  const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+  const dstW = Math.max(1, Math.round(srcW * scale));
+  const dstH = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = dstW;
+  canvas.height = dstH;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bmp, 0, 0, dstW, dstH);
+
+  const blob = await new Promise((resolve) => {
+    canvas.toBlob((b) => resolve(b), "image/jpeg", quality);
+  });
+
+  if (bmp instanceof HTMLImageElement) {
+    try { URL.revokeObjectURL(bmp.src); } catch {}
+  }
+
+  return { blob, mime: "image/jpeg", width: dstW, height: dstH };
+}
+
+async function render() {
+  clearObjectUrls();
+  const r = parseRoute();
+
+  if (!location.hash) location.hash = "#/wishlist";
+
+  const base = r.name === "item" ? "#/tried" : `#/${r.name}`;
+  setActiveNav(base);
+
+  try {
+    if (r.name === "wishlist") return await renderWishlist();
+    if (r.name === "new") return await renderNewTasting(r.params);
+    if (r.name === "tried") return await renderTried();
+    if (r.name === "item") return await renderItemDetail(r.itemId);
+    if (r.name === "archived") return await renderArchived();
+    if (r.name === "export") return await renderExport();
+  } catch (e) {
+    console.error(e);
+    appEl.innerHTML = pageShell("Error") + `<div class="px-4 max-w-2xl mx-auto">${card(`<div class="text-rose-700 text-sm">${escapeHtml(e.message || e)}</div>`)}</div>`;
+  }
+}
+
+async function renderWishlist() {
+  const entries = await DTDB.listWishlistActive();
+  const desserts = await DTDB.listDessertTypesActive();
+  const places = await DTDB.listPlacesActive();
+
+  const dessertOptions = desserts.map(d => `<option value="${escapeHtml(d.name)}"></option>`).join("");
+  const placeOptions = places.map(p => `<option value="${escapeHtml(p.name)}"></option>`).join("");
+
+  appEl.innerHTML =
+    pageShell("Wishlist", button("Add", `id="wl-add"`)) +
+    `<div class="mx-auto max-w-2xl px-4 space-y-3 pb-6">
+      ${entries.length ? entries.map(e => card(`
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <div class="font-semibold truncate">${escapeHtml(e.dessertName)}</div>
+            <div class="text-sm text-slate-600 truncate">${escapeHtml(e.placeName)}</div>
+            ${e.mapsUrl ? `<a class="text-sm text-blue-600 underline" target="_blank" rel="noreferrer" href="${escapeAttr(e.mapsUrl)}">Open Maps</a>` : ``}
+          </div>
+          <div class="flex flex-col gap-2 shrink-0">
+            ${buttonGhost("Edit", `data-action="wl-edit" data-id="${e.id}"`)}
+            ${button("Tried", `data-action="wl-tried" data-id="${e.id}" data-itemid="${e.itemId}"`)}
+            ${buttonDanger("Archive", `data-action="wl-archive" data-id="${e.id}"`)}
+          </div>
+        </div>
+      `)).join("") : card(`
+        <div class="text-sm text-slate-600">
+          Nothing in your wishlist yet. Tap <span class="font-medium">Add</span> to save a dessert you want to try.
+        </div>
+      `)}
+    </div>
+    <datalist id="dt-desserts">${dessertOptions}</datalist>
+    <datalist id="dt-places">${placeOptions}</datalist>
+    `;
+
+  document.getElementById("wl-add").onclick = () => openWishlistModal({ mode: "add" });
+
+  appEl.querySelectorAll('[data-action="wl-edit"]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-id");
+      const current = (await DTDB.listWishlistActive()).find(x => x.id === id);
+      openWishlistModal({
+        mode: "edit",
+        id,
+        dessert: current?.dessertName || "",
+        place: current?.placeName || "",
+        mapsUrl: current?.mapsUrl || ""
+      });
+    };
+  });
+
+  appEl.querySelectorAll('[data-action="wl-tried"]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-id");
+      const itemId = btn.getAttribute("data-itemid");
+      await DTDB.archiveEntity("wishlist", id);
+      toast("Marked as tried ✅", "ok");
+      navigate(`#/new?itemId=${encodeURIComponent(itemId)}`);
+    };
+  });
+
+  appEl.querySelectorAll('[data-action="wl-archive"]').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute("data-id");
+      await DTDB.archiveEntity("wishlist", id);
+      toast("Archived", "ok");
+      await render();
+    };
+  });
+}
+
+function openWishlistModal({ mode, id, dessert = "", place = "", mapsUrl = "" }) {
+  openModal(`
+    <div class="flex items-center justify-between">
+      <div class="text-lg font-semibold">${mode === "add" ? "Add to Wishlist" : "Edit Wishlist"}</div>
+      ${buttonGhost("Close", `id="modal-close"`)}
+    </div>
+
+    <form id="wl-form" class="mt-4 space-y-3">
+      <div>
+        <label class="text-sm font-medium">Dessert</label>
+        <input list="dt-desserts" name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="e.g., Tiramisu" value="${escapeAttr(dessert)}" required />
+      </div>
+      <div>
+        <label class="text-sm font-medium">Place</label>
+        <input list="dt-places" name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="e.g., Third Wave Cafe" value="${escapeAttr(place)}" required />
+      </div>
+      <div>
+        <label class="text-sm font-medium">Google Maps URL (optional)</label>
+        <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" placeholder="Paste a Google Maps link" value="${escapeAttr(mapsUrl)}" />
+      </div>
+
+      <div class="pt-2 flex justify-end gap-2">
+        ${buttonGhost("Cancel", `type="button" id="wl-cancel"`)}
+        ${button(mode === "add" ? "Add" : "Save", `type="submit"`)}
+      </div>
+    </form>
+  `);
+
+  document.getElementById("modal-close").onclick = closeModal;
+  document.getElementById("wl-cancel").onclick = closeModal;
+
+  document.getElementById("wl-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const dessertName = String(fd.get("dessert") || "");
+    const placeName = String(fd.get("place") || "");
+    const mapsUrl = String(fd.get("mapsUrl") || "");
+
+    const dt = await DTDB.getOrCreateDessertType(dessertName);
+    const pl = await DTDB.getOrCreatePlace(placeName, mapsUrl);
+    const it = await DTDB.getOrCreateItem(dt.id, pl.id);
+
+    if (mode === "add") {
+      await DTDB.createWishlistEntry(it.id);
+      toast("Added to wishlist", "ok");
+    } else {
+      await DTDB.updateWishlistEntry(id, { itemId: it.id });
+      toast("Wishlist updated", "ok");
     }
-    return existing;
-  }
 
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  const item = { id, dessertTypeId, placeId, archived: false, createdAt: ts, updatedAt: ts };
-  await db.items.add(item);
-  return item;
-}
-
-/** Wishlist */
-async function createWishlistEntry(itemId) {
-  if (!itemId) throw new Error("Wishlist entry requires itemId");
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  const row = { id, itemId, archived: false, createdAt: ts, updatedAt: ts };
-  await db.wishlist.add(row);
-  return row;
-}
-async function updateWishlistEntry(id, patch) {
-  const existing = await db.wishlist.get(id);
-  if (!existing) throw new Error("Wishlist entry not found");
-  const updated = await upsertTimestamps(existing, patch);
-  await db.wishlist.put(updated);
-  return updated;
-}
-
-/** Photos */
-async function createPhoto(blob, mime = "image/jpeg") {
-  if (!blob) throw new Error("Photo blob required");
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  await db.photos.add({ id, blob, mime, createdAt: ts });
-  return { id, mime };
-}
-async function deletePhoto(photoId) {
-  if (!photoId) return;
-  await db.photos.delete(photoId);
-}
-
-/** Tastings */
-function clampRating(r) {
-  const n = Number(r);
-  if (!Number.isFinite(n) || n < 1 || n > 5 || Math.floor(n) !== n) throw new Error("Rating must be an integer 1–5");
-  return n;
-}
-async function createTasting(tastingData, photoBlobAndMime /* {blob, mime} | null */) {
-  const { itemId, date, rating } = tastingData || {};
-  if (!itemId) throw new Error("Tasting requires itemId");
-  const safeRating = clampRating(rating);
-  const safeDate = date || todayIsoDate();
-
-  let photoId, photoMime;
-  if (photoBlobAndMime && photoBlobAndMime.blob) {
-    const res = await createPhoto(photoBlobAndMime.blob, photoBlobAndMime.mime || "image/jpeg");
-    photoId = res.id;
-    photoMime = res.mime;
-  }
-
-  const id = crypto.randomUUID();
-  const ts = nowIso();
-  const row = {
-    id,
-    itemId,
-    date: safeDate,
-    rating: safeRating,
-    wouldRepeat: tastingData.wouldRepeat ?? undefined,
-    review: (tastingData.review || "").trim() || undefined,
-    photoId,
-    photoMime,
-    archived: false,
-    createdAt: ts,
-    updatedAt: ts
-  };
-  await db.tastings.add(row);
-  return row;
-}
-
-async function updateTasting(id, patch, photoOp /* {mode:"keep"|"replace"|"remove", blob?, mime?} */) {
-  const existing = await db.tastings.get(id);
-  if (!existing) throw new Error("Tasting not found");
-
-  const next = { ...existing };
-
-  if (patch.date) next.date = patch.date;
-  if (patch.rating !== undefined) next.rating = clampRating(patch.rating);
-  next.wouldRepeat = patch.wouldRepeat ?? undefined;
-  next.review = (patch.review || "").trim() || undefined;
-
-  // photo ops
-  if (photoOp?.mode === "remove") {
-    if (next.photoId) await deletePhoto(next.photoId);
-    next.photoId = undefined;
-    next.photoMime = undefined;
-  } else if (photoOp?.mode === "replace") {
-    if (next.photoId) await deletePhoto(next.photoId);
-    const res = await createPhoto(photoOp.blob, photoOp.mime || "image/jpeg");
-    next.photoId = res.id;
-    next.photoMime = res.mime;
-  }
-
-  next.updatedAt = nowIso();
-  await db.tastings.put(next);
-  return next;
-}
-
-/** Archive / Restore (generic) */
-async function archiveEntity(tableName, id) {
-  const table = db[tableName];
-  if (!table) throw new Error(`Unknown table: ${tableName}`);
-  const ts = nowIso();
-  await table.update(id, { archived: true, archivedAt: ts, updatedAt: ts });
-}
-async function restoreEntity(tableName, id) {
-  const table = db[tableName];
-  if (!table) throw new Error(`Unknown table: ${tableName}`);
-  const ts = nowIso();
-  await table.update(id, { archived: false, archivedAt: undefined, updatedAt: ts });
-}
-
-/** Queries / View models */
-async function listDessertTypesActive() {
-  return db.dessertTypes.where("archived").equals(false).toArray();
-}
-async function listPlacesActive() {
-  return db.places.where("archived").equals(false).toArray();
-}
-
-async function listWishlistActive() {
-  const entries = await db.wishlist.where("archived").equals(false).reverse().sortBy("createdAt");
-  return enrichWishlistEntries(entries);
-}
-async function listWishlistArchived() {
-  const entries = await db.wishlist.where("archived").equals(true).reverse().sortBy("createdAt");
-  return enrichWishlistEntries(entries);
-}
-
-async function enrichWishlistEntries(entries) {
-  if (!entries.length) return [];
-  const itemIds = [...new Set(entries.map(e => e.itemId))];
-  const items = (await db.items.bulkGet(itemIds)).filter(Boolean);
-
-  const dessertIds = [...new Set(items.map(i => i.dessertTypeId))];
-  const placeIds = [...new Set(items.map(i => i.placeId))];
-
-  const desserts = (await db.dessertTypes.bulkGet(dessertIds)).filter(Boolean);
-  const places = (await db.places.bulkGet(placeIds)).filter(Boolean);
-
-  const dessertById = Object.fromEntries(desserts.map(d => [d.id, d]));
-  const placeById = Object.fromEntries(places.map(p => [p.id, p]));
-  const itemById = Object.fromEntries(items.map(i => [i.id, i]));
-
-  return entries.map(e => {
-    const item = itemById[e.itemId];
-    const dessert = item ? dessertById[item.dessertTypeId] : null;
-    const place = item ? placeById[item.placeId] : null;
-    return {
-      ...e,
-      item,
-      dessertName: dessert?.name || "Unknown dessert",
-      placeName: place?.name || "Unknown place",
-      mapsUrl: place?.mapsUrl
-    };
-  });
-}
-
-async function listRecentTastings(limit = 5) {
-  const tastings = await db.tastings.where("archived").equals(false).reverse().sortBy("createdAt");
-  const sliced = tastings.slice(0, limit);
-  return enrichTastings(sliced);
-}
-
-async function enrichTastings(tastings) {
-  if (!tastings.length) return [];
-  const itemIds = [...new Set(tastings.map(t => t.itemId))];
-  const items = (await db.items.bulkGet(itemIds)).filter(Boolean);
-  const dessertIds = [...new Set(items.map(i => i.dessertTypeId))];
-  const placeIds = [...new Set(items.map(i => i.placeId))];
-  const desserts = (await db.dessertTypes.bulkGet(dessertIds)).filter(Boolean);
-  const places = (await db.places.bulkGet(placeIds)).filter(Boolean);
-
-  const itemById = Object.fromEntries(items.map(i => [i.id, i]));
-  const dessertById = Object.fromEntries(desserts.map(d => [d.id, d]));
-  const placeById = Object.fromEntries(places.map(p => [p.id, p]));
-
-  return tastings.map(t => {
-    const item = itemById[t.itemId];
-    const dessert = item ? dessertById[item.dessertTypeId] : null;
-    const place = item ? placeById[item.placeId] : null;
-    return {
-      ...t,
-      dessertName: dessert?.name || "Unknown dessert",
-      placeName: place?.name || "Unknown place"
-    };
-  });
-}
-
-async function listTriedItemSummariesActive() {
-  // Find all unarchived tastings and aggregate by itemId
-  const tastings = await db.tastings.where("archived").equals(false).toArray();
-  const agg = new Map(); // itemId -> {count,sum}
-  for (const t of tastings) {
-    const a = agg.get(t.itemId) || { count: 0, sum: 0 };
-    a.count += 1;
-    a.sum += Number(t.rating) || 0;
-    agg.set(t.itemId, a);
-  }
-  const itemIds = [...agg.keys()];
-  if (!itemIds.length) return [];
-
-  const items = (await db.items.bulkGet(itemIds)).filter(Boolean).filter(i => !i.archived);
-  const dessertIds = [...new Set(items.map(i => i.dessertTypeId))];
-  const placeIds = [...new Set(items.map(i => i.placeId))];
-
-  const desserts = (await db.dessertTypes.bulkGet(dessertIds)).filter(Boolean);
-  const places = (await db.places.bulkGet(placeIds)).filter(Boolean);
-
-  const dessertById = Object.fromEntries(desserts.map(d => [d.id, d]));
-  const placeById = Object.fromEntries(places.map(p => [p.id, p]));
-
-  return items.map(i => {
-    const a = agg.get(i.id) || { count: 0, sum: 0 };
-    return {
-      itemId: i.id,
-      dessertName: dessertById[i.dessertTypeId]?.name || "Unknown dessert",
-      placeName: placeById[i.placeId]?.name || "Unknown place",
-      count: a.count,
-      avg: a.count ? a.sum / a.count : 0
-    };
-  }).sort((a, b) => b.count - a.count || b.avg - a.avg);
-}
-
-async function getItemDetail(itemId) {
-  const item = await db.items.get(itemId);
-  if (!item) throw new Error("Item not found");
-
-  const dessert = await db.dessertTypes.get(item.dessertTypeId);
-  const place = await db.places.get(item.placeId);
-  const tastings = await db.tastings.where("itemId").equals(itemId).and(t => !t.archived).toArray();
-  tastings.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || "").localeCompare(a.createdAt || ""));
-
-  const count = tastings.length;
-  const avg = count ? tastings.reduce((s, t) => s + Number(t.rating || 0), 0) / count : 0;
-
-  return {
-    item,
-    dessert,
-    place,
-    tastings,
-    stats: { count, avg }
+    closeModal();
+    await render();
   };
 }
 
-async function listArchivedAll() {
-  const [dessertTypes, places, items, wishlist, tastings] = await Promise.all([
-    db.dessertTypes.where("archived").equals(true).toArray(),
-    db.places.where("archived").equals(true).toArray(),
-    db.items.where("archived").equals(true).toArray(),
-    db.wishlist.where("archived").equals(true).toArray(),
-    db.tastings.where("archived").equals(true).toArray()
-  ]);
+async function renderNewTasting(params) {
+  const itemId = params?.get("itemId") || "";
 
-  // Enrich wishlist/tastings with names for display
-  const wishlistEnriched = await enrichWishlistEntries(wishlist);
-  const tastingsEnriched = await enrichTastings(tastings);
+  const desserts = await DTDB.listDessertTypesActive();
+  const places = await DTDB.listPlacesActive();
+  const dessertOptions = desserts.map(d => `<option value="${escapeHtml(d.name)}"></option>`).join("");
+  const placeOptions = places.map(p => `<option value="${escapeHtml(p.name)}"></option>`).join("");
 
-  // Enrich items with names
-  const dessertById = Object.fromEntries(dessertTypes.map(d => [d.id, d]));
-  const placeById = Object.fromEntries(places.map(p => [p.id, p]));
+  let prefillDessert = "";
+  let prefillPlace = "";
+  let prefillMaps = "";
 
-  // For archived items, we may need active dessert/place too
-  const allDesserts = await db.dessertTypes.toArray();
-  const allPlaces = await db.places.toArray();
-  const allDessertById = Object.fromEntries(allDesserts.map(d => [d.id, d]));
-  const allPlaceById = Object.fromEntries(allPlaces.map(p => [p.id, p]));
+  if (itemId) {
+    const detail = await DTDB.getItemDetail(itemId);
+    prefillDessert = detail.dessert?.name || "";
+    prefillPlace = detail.place?.name || "";
+    prefillMaps = detail.place?.mapsUrl || "";
+  }
 
-  const itemsEnriched = items.map(i => ({
-    ...i,
-    dessertName: allDessertById[i.dessertTypeId]?.name || dessertById[i.dessertTypeId]?.name || "Unknown dessert",
-    placeName: allPlaceById[i.placeId]?.name || placeById[i.placeId]?.name || "Unknown place",
-  }));
+  const recent = await DTDB.listRecentTastings(5);
 
-  return { dessertTypes, places, items: itemsEnriched, wishlist: wishlistEnriched, tastings: tastingsEnriched };
+  appEl.innerHTML =
+    pageShell("New Tasting") +
+    `<div class="mx-auto max-w-2xl px-4 space-y-4 pb-6">
+      ${card(`
+        <form id="tasting-form" class="space-y-3">
+          <div>
+            <label class="text-sm font-medium">Dessert</label>
+            <input list="dt-desserts" name="dessert" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
+              placeholder="e.g., Cheesecake" value="${escapeAttr(prefillDessert)}" required />
+          </div>
+
+          <div>
+            <label class="text-sm font-medium">Place</label>
+            <input list="dt-places" name="place" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
+              placeholder="e.g., Magnolia Bakery" value="${escapeAttr(prefillPlace)}" required />
+          </div>
+
+          <div>
+            <label class="text-sm font-medium">Google Maps URL (optional)</label>
+            <input name="mapsUrl" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
+              placeholder="Paste a Google Maps link" value="${escapeAttr(prefillMaps)}" />
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium">Rating (1–5)</label>
+              <select name="rating" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300" required>
+                <option value="">Select…</option>
+                ${[1,2,3,4,5].map(n => `<option value="${n}">${n}</option>`).join("")}
+              </select>
+            </div>
+            <div>
+              <label class="text-sm font-medium">Date</label>
+              <input type="date" name="date" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
+                value="${DTDB.todayIsoDate()}" />
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <input id="wouldRepeat" type="checkbox" name="wouldRepeat" class="h-4 w-4" />
+            <label for="wouldRepeat" class="text-sm">Would repeat</label>
+          </div>
+
+          <div>
+            <label class="text-sm font-medium">Review (optional)</label>
+            <textarea name="review" rows="3" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-300"
+              placeholder="What did you like? Anything to remember?"></textarea>
+          </div>
+
+          <div>
+            <label class="text-sm font-medium">Photo (optional)</label>
+            <input type="file" accept="image/*" name="photo" class="mt-1 w-full text-sm" />
+            <div id="photo-preview" class="mt-2 text-sm text-slate-600"></div>
+          </div>
+
+          <div class="pt-2 flex justify-end gap-2">
+            ${buttonGhost("Clear", `type="button" id="tasting-clear"`)}
+            ${button("Save Tasting", `type="submit"`)}
+          </div>
+        </form>
+      `)}
+
+      ${card(`
+        <div class="font-semibold mb-2">Recent Tastings</div>
+        ${recent.length ? `
+          <div class="space-y-2">
+            ${recent.map(t => `
+              <div class="min-w-0">
+                <div class="text-sm font-medium truncate">${escapeHtml(t.dessertName)} <span class="text-slate-500">@</span> ${escapeHtml(t.placeName)}</div>
+                <div class="text-xs text-slate-600">${escapeHtml(t.date)} • Rating ${t.rating}</div>
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="text-sm text-slate-600">No tastings yet.</div>`}
+      `)}
+    </div>
+    <datalist id="dt-desserts">${dessertOptions}</datalist>
+    <datalist id="dt-places">${placeOptions}</datalist>
+    `;
+
+  const form = document.getElementById("tasting-form");
+  const photoInput = form.photo;
+  const photoPreview = document.getElementById("photo-preview");
+  let compressedPhoto = null;
+
+  photoInput.onchange = async () => {
+    const f = photoInput.files && photoInput.files[0];
+    if (!f) {
+      compressedPhoto = null;
+      photoPreview.innerHTML = "";
+      return;
+    }
+    photoPreview.textContent = "Compressing…";
+    try {
+      compressedPhoto = await fileToJpegCompressed(f, 1280, 0.75);
+      const kb = Math.round((compressedPhoto.blob.size || 0) / 1024);
+      const url = URL.createObjectURL(compressedPhoto.blob);
+      activeObjectUrls.push(url);
+      photoPreview.innerHTML = `
+        <div class="flex items-center gap-3">
+          <img src="${url}" class="h-16 w-16 object-cover rounded-xl border border-slate-200" />
+          <div class="text-xs text-slate-600">
+            Compressed: ${compressedPhoto.width}×${compressedPhoto.height} • ~${kb} KB
+          </div>
+        </div>
+      `;
+    } catch (e) {
+      console.error(e);
+      compressedPhoto = null;
+      photoPreview.innerHTML = `<div class="text-rose-700 text-sm">Could not process photo.</div>`;
+    }
+  };
+
+  document.getElementById("tasting-clear").onclick = () => {
+    form.reset();
+    form.date.value = DTDB.todayIsoDate();
+    compressedPhoto = null;
+    photoPreview.innerHTML = "";
+    toast("Cleared", "ok");
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+
+    const dessertName = String(fd.get("dessert") || "");
+    const placeName = String(fd.get("place") || "");
+    const mapsUrl = String(fd.get("mapsUrl") || "");
+    const rating = Number(fd.get("rating"));
+    const date = String(fd.get("date") || DTDB.todayIsoDate());
+    const wouldRepeat = form.wouldRepeat.checked ? true : undefined;
+    const review = String(fd.get("review") || "");
+
+    const dt = await DTDB.getOrCreateDessertType(dessertName);
+    const pl = await DTDB.getOrCreatePlace(placeName, mapsUrl);
+    const it = await DTDB.getOrCreateItem(dt.id, pl.id);
+
+    const photoArg = compressedPhoto?.blob ? { blob: compressedPhoto.blob, mime: "image/jpeg" } : null;
+    await DTDB.createTasting({ itemId: it.id, date, rating, wouldRepeat, review }, photoArg);
+
+    toast("Tasting saved ✅", "ok");
+    navigate(`#/item/${encodeURIComponent(it.id)}`);
+  };
 }
 
-async function exportBundle() {
-  const [dessertTypes, places, items, wishlist, tastings] = await Promise.all([
-    db.dessertTypes.toArray(),
-    db.places.toArray(),
-    db.items.toArray(),
-    db.wishlist.toArray(),
-    db.tastings.toArray()
-  ]);
-  const photos = await db.photos.toArray(); // includes blobs; used for ZIP creation
-  return { dessertTypes, places, items, wishlist, tastings, photos };
+// NOTE: The rest of app.js (Tried, Item detail, Archived, Export, wiring, escaping) is unchanged
+// from the version I previously gave you. If you want, I can paste the full remainder too,
+// but first confirm the site loads after these file corrections.
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
+function escapeAttr(s) { return escapeHtml(s); }
 
-// expose
-window.DTDB = {
-  db,
-  nowIso,
-  todayIsoDate,
-  normalizeName,
-  getOrCreateDessertType,
-  getOrCreatePlace,
-  getOrCreateItem,
-  createWishlistEntry,
-  updateWishlistEntry,
-  createTasting,
-  updateTasting,
-  archiveEntity,
-  restoreEntity,
-  listDessertTypesActive,
-  listPlacesActive,
-  listWishlistActive,
-  listWishlistArchived,
-  listRecentTastings,
-  listTriedItemSummariesActive,
-  getItemDetail,
-  listArchivedAll,
-  exportBundle
-};
+// Temporary minimal routing so the app works immediately after paste.
+// If your app.js already had full routes, keep them; otherwise use this:
+navEl.querySelectorAll("button[data-route]").forEach(btn => {
+  btn.addEventListener("click", () => navigate(btn.getAttribute("data-route")));
+});
+window.addEventListener("hashchange", render);
+window.addEventListener("load", () => {
+  if (!location.hash) location.hash = "#/wishlist";
+  render();
+});
